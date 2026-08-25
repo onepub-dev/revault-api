@@ -3,6 +3,6 @@
 package revault
 
 /*
-#cgo LDFLAGS: ${SRCDIR}/native/windows-aarch64-msvc/revault_api.lib -lbcrypt -lcrypt32 -lncrypt -luserenv -lws2_32 -ladvapi32
+#cgo LDFLAGS: ${SRCDIR}/native/windows-aarch64-msvc/librevault_api_go.a -lbcrypt -lcrypt32 -lncrypt -luserenv -lws2_32 -ladvapi32 -lntdll -Wl,-Bstatic -lunwind -Wl,-Bdynamic
 */
 import "C"

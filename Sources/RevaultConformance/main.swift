@@ -1,7 +1,7 @@
 import Foundation
 import RevaultAPI
 
-let api = Vault()
+let api = Revault()
 func pass(_ symbol: String, _ assertions: Int = 1) { print("PASS\tswift\t\(symbol)\t\(assertions)") }
 func check(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
     if try !value() { throw NSError(domain: "RevaultSwiftConformance", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
@@ -15,13 +15,14 @@ func artifactRoot() throws -> String {
     let path = (ProcessInfo.processInfo.environment["REVAULT_E2E_ARTIFACT_DIR"] ?? "/tmp/revault-e2e-artifacts") + "/swift"
     try makeDirectory(path); return path
 }
-func fields() throws -> Data {
-    var field = Revault_Bindings_FormField(); field.id = "username"; field.label = "Username"; field.kind = "text"; field.required = true
-    var list = Revault_Bindings_FormFieldList(); list.values = [field]; return try list.serializedData()
+func fields() -> [FormField] {
+    [
+        FormField(id: "username", label: "Username", kind: "text", required: true),
+        FormField(id: "password", label: "Password", kind: "secret", required: true),
+    ]
 }
-func moves(_ source: String, _ destination: String) throws -> Data {
-    var move = Revault_Bindings_PathMove(); move.source = source; move.destination = destination
-    var list = Revault_Bindings_PathMoveList(); list.values = [move]; return try list.serializedData()
+func moves(_ source: String, _ destination: String) -> [PathMove] {
+    [PathMove(source: source, destination: destination)]
 }
 
 func archiveLifecycle() throws {
@@ -38,16 +39,22 @@ func archiveLifecycle() throws {
     try check(try box.exists("/renamed.txt") && !(try box.exists("/hello.txt")), "exists"); pass("lockbox_exists", 2)
     try box.setPermissions("/renamed.txt", 0o600); pass("lockbox_set_permissions", 2)
     try check(try box.readRange("/renamed.txt", 0, 11) == data("replacement"), "range"); pass("lockbox_read_range", 3)
-    try box.setVariable("normal", "value", false); pass("lockbox_set_variable")
+    try box.setDescription("Deployment credentials for Project Atlas")
+    try check(try box.description == "Deployment credentials for Project Atlas", "description")
+    try box.clearDescription(); try check(try box.description == nil, "description cleared")
+    try box.setVariable("normal", "value"); pass("lockbox_set_variable")
     try check(try box.getVariable("normal") == "value", "variable"); pass("lockbox_get_variable", 3)
     try box.moveVariables(moves("normal", "moved")); try check(try box.getVariable("moved") == "value", "moved variable")
     try box.moveVariables(moves("moved", "normal")); pass("lockbox_move_variables", 3)
-    try box.setVariable("secret", "hidden", true); _ = try box.variableSensitivity("secret"); pass("lockbox_variable_sensitivity", 2)
-    try check(try box.listVariables().values.count == 2, "variables"); pass("lockbox_list_variables")
+    try box.setSecretVariable("secret", data("hidden")); pass("lockbox_set_secret_variable")
+    try check(try box.withSecretVariable("secret") { Data($0) } == data("hidden"), "secret variable")
+    pass("lockbox_get_secret_variable"); pass("secret_len"); pass("secret_copy"); pass("secret_free")
+    _ = try box.variableSensitivity("secret"); pass("lockbox_variable_sensitivity", 2)
+    try check(try box.listVariables().count == 2, "variables"); pass("lockbox_list_variables")
     try box.deleteVariable("normal"); pass("lockbox_delete_variable")
     try box.addSymlink("/link", "/renamed.txt", false); pass("lockbox_add_symlink")
     try check(try box.getSymlinkTarget("/link") == "/renamed.txt", "symlink"); pass("lockbox_get_symlink_target", 3)
-    try check(try !box.list("/", true).entries.isEmpty, "list"); _ = try box.stat("/renamed.txt"); pass("lockbox_list", 2); pass("lockbox_stat", 2)
+    try check(try !box.list("/", true).isEmpty, "list"); _ = try box.stat("/renamed.txt"); pass("lockbox_list", 2); pass("lockbox_stat", 2)
     try box.setWorkloadProfile("read-mostly"); try box.setWorkerPolicy("single", 1); _ = try box.runtimeOptions()
     pass("lockbox_set_workload_profile"); pass("lockbox_set_worker_policy"); pass("lockbox_runtime_options")
     try box.commit(); pass("lockbox_commit"); try check(try box.storageLen() > 0, "storage"); pass("lockbox_storage_len")
@@ -84,11 +91,11 @@ func keyLifecycle() throws {
     try importedPublic.publicFree(); try publicKey.publicFree(); pass("key_contact_public_free", 2)
     try importedPrivate.free(); try copy.free(); try contact.free(); pass("key_contact_free", 3)
     let plain = try api.vaultKeyHexEncode(content); try check(try api.vaultKeyHexDecode(plain) == content, "plain hex"); pass("vault_key_hex_encode", 2); pass("vault_key_hex_decode", 2)
-    let signing = try api.keySigningGenerate(); pass("key_signing_generate")
-    let signingPrivate = try signing.privateBytes(); let signingPublic = try signing.publicBytes(); pass("key_signing_private", 2); pass("key_signing_public", 2)
-    try api.keySigningFromPrivate(signingPrivate).free(); pass("key_signing_from_private")
-    try api.keySigningPublicFromBytes(signingPublic).publicFree(); pass("key_signing_public_from_bytes"); pass("key_signing_public_free", 2)
-    try signing.free(); pass("key_signing_free", 3)
+    let signing = try api.generateProfileSigningKeyPair(); pass("key_signing_generate")
+    let signingPrivate = try signing.privateRecord(); let signingPublic = try signing.publicBytes(); pass("key_signing_private", 2); pass("key_signing_public", 2)
+    try api.profileSigningKeyPairFromPrivate(signingPrivate).dispose(); pass("key_signing_from_private")
+    try api.profileSigningPublicKeyFromBytes(signingPublic).dispose(); pass("key_signing_public_from_bytes"); pass("key_signing_public_free", 2)
+    try signing.dispose(); pass("key_signing_free", 3)
 }
 
 func advancedArchive() throws {
@@ -97,15 +104,17 @@ func advancedArchive() throws {
     try box.addFile("/account.txt", data("account data"), false)
     _ = try box.listWithOptions("/", "*.txt", true, true, false, false, 20); pass("lockbox_list_with_options", 2)
     let definition = try box.defineForm("account", "Account", "Account form", fields()); pass("lockbox_define_form", 2)
-    _ = try box.listFormDefinitions(); _ = try box.resolveForm("account"); _ = try box.listFormRevisions(definition.typeID)
+    _ = try box.listFormDefinitions(); _ = try box.resolveForm("account"); _ = try box.listFormRevisions(definition.typeId)
     pass("lockbox_list_form_definitions"); pass("lockbox_resolve_form"); pass("lockbox_list_form_revisions")
     _ = try box.createFormRecord("/account.form", "account", "Primary"); pass("lockbox_create_form_record")
-    try box.setFormField("/account.form", "username", "alice", false); pass("lockbox_set_form_field")
+    try box.setFormField("/account.form", "username", "alice"); pass("lockbox_set_form_field")
+    try box.setSecretFormField("/account.form", "password", data("hidden")); pass("lockbox_set_secret_form_field")
+    try check(try box.withSecretFormField("/account.form", "password") { Data($0) } == data("hidden"), "secret form field"); pass("lockbox_get_secret_form_field")
     _ = try box.getFormRecord("/account.form"); _ = try box.getFormField("/account.form", "username"); _ = try box.listFormRecords()
     pass("lockbox_get_form_record"); pass("lockbox_get_form_field"); pass("lockbox_list_form_records")
     try box.moveFormRecords(moves("/account.form", "/moved.form")); _ = try box.getFormRecord("/moved.form")
     try box.moveFormRecords(moves("/moved.form", "/account.form")); pass("lockbox_move_form_records", 3)
-    let signing = try api.keySigningGenerate(); let contact = try api.keyContactGenerate(); let publicKey = try api.keyContactPublicFromBytes(try contact.publicBytes())
+    let signing = try api.generateProfileSigningKeyPair(); let contact = try api.keyContactGenerate(); let publicKey = try api.keyContactPublicFromBytes(try contact.publicBytes())
     try box.setOwnerSigningKey(signing); pass("lockbox_set_owner_signing_key")
     let slot = try box.addPassword(data("archive password")); pass("lockbox_add_password")
     _ = try box.addContact(publicKey, "recipient"); pass("lockbox_add_contact"); _ = try box.listKeySlots(); pass("lockbox_list_key_slots")
@@ -125,31 +134,31 @@ func advancedArchive() throws {
     let contactBox = try api.lockboxCreateContact(publicKey); try contactBox.addFile("/contact.txt", data("contact protected"), false); try contactBox.commit()
     let contactArchive = try contactBox.toBytes(); try contactBox.free(); pass("lockbox_create_contact")
     let contactOpen = try api.lockboxOpenContact(contactArchive, contact); _ = try contactOpen.getFile("/contact.txt"); try contactOpen.free(); pass("lockbox_open_contact", 2)
-    let signed = try api.lockboxCreateWithSigningKey(key, signing); try signed.commit(); try signed.free(); pass("lockbox_create_with_signing_key", 2)
+    let signed = try api.lockboxCreateWithProfileSigningKey(key, signing); try signed.commit(); try signed.free(); pass("lockbox_create_with_signing_key", 2)
     let extract = "/tmp/revault-swift-extract"; try resetDirectory(extract); try box.extractFile("/account.txt", extract + "/account.txt", false); pass("lockbox_extract_file", 2)
     let tree = extract + "/tree"; try makeDirectory(tree); try box.extractDirectory(tree, 1 << 20, 4 << 20, 100, false, true, false); pass("lockbox_extract_directory", 2)
     try box.deleteFormRecord("/account.form"); pass("lockbox_delete_form_record")
-    try box.free(); try publicKey.publicFree(); try contact.free(); try signing.free()
+    try box.free(); try publicKey.publicFree(); try contact.free(); try signing.dispose()
 }
 
 func vaultLifecycle() throws {
     let root = try artifactRoot() + "/vault"; try resetDirectory(root)
     let password = data("vault password"), changed = data("new vault password"), id = sequence(160, 175)
     let profile = try api.keyContactGenerate(), contact = try api.keyContactGenerate(), contactPublic = try api.keyContactPublicFromBytes(try contact.publicBytes())
-    let owner = try api.keySigningGenerate(), ownerPublic = try api.keySigningPublicFromBytes(try owner.publicBytes())
-    let vault = try api.vaultDirectoryReplace(root, password); pass("vault_directory_replace"); print("ARTIFACT\tswift\tvault-created\t\(root)")
+    let owner = try api.generateProfileSigningKeyPair(), ownerPublic = try owner.publicKey()
+    let vault = try api.replaceVault(root, password); pass("vault_directory_replace"); print("ARTIFACT\tswift\tvault-created\t\(root)")
     try check(try vault.root() == root && vault.structureVersion() > 0, "vault"); pass("vault_directory_root", 3); pass("vault_directory_structure_version")
     let current = try api.vaultStructureVersionCurrent()
-    try check(try current == vault.structureVersion() && api.vaultDirectoryProbeStructureVersion(root, password) == current, "vault probe")
+    try check(try current == vault.structureVersion() && api.probeVaultStructureVersion(root, password) == current, "vault probe")
     pass("vault_structure_version_current", 2); pass("vault_directory_probe_structure_version", 2)
     try vault.storePrivateKey("alice", profile); pass("vault_directory_store_private_key"); _ = try vault.privateKeyExists("alice"); pass("vault_directory_private_key_exists")
     try vault.loadPrivateKey("alice").free(); try vault.loadPrivateKeyGeneration("alice", 1).free(); pass("vault_directory_load_private_key"); pass("vault_directory_load_private_key_generation")
     try vault.storeProfileEmail("alice", "alice@example.test"); _ = try vault.profileEmail("alice"); pass("vault_directory_store_profile_email"); pass("vault_directory_profile_email", 3)
     _ = try vault.listProfileGenerations("alice"); _ = try vault.rotatePrivateKey("alice"); pass("vault_directory_list_profile_generations"); pass("vault_directory_rotate_private_key")
-    try vault.loadOwnerSigningKey("alice").free(); try vault.loadOwnerSigningKeyGeneration("alice", 1).free(); pass("vault_directory_load_owner_signing_key"); pass("vault_directory_load_owner_signing_key_generation")
+    try vault.loadProfileSigningKey("alice").dispose(); try vault.loadProfileSigningKeyGeneration("alice", 1).dispose(); pass("vault_directory_load_owner_signing_key"); pass("vault_directory_load_owner_signing_key_generation")
     try vault.storeContact("bob", contactPublic); _ = try vault.contactExists("bob"); try vault.loadContact("bob").publicFree(); _ = try vault.listContacts()
     pass("vault_directory_store_contact"); pass("vault_directory_contact_exists"); pass("vault_directory_load_contact"); pass("vault_directory_list_contacts")
-    try vault.storeContactSigningKey("bob", ownerPublic); try vault.loadContactSigningKey("bob").publicFree(); pass("vault_directory_store_contact_signing_key"); pass("vault_directory_load_contact_signing_key")
+    try vault.storeContactSigningKey("bob", ownerPublic); try vault.loadContactSigningKey("bob").dispose(); pass("vault_directory_store_contact_signing_key"); pass("vault_directory_load_contact_signing_key")
     _ = try vault.listPrivateKeys(); _ = try vault.listPrivateKeyNames(); _ = try vault.listContactNames(); pass("vault_directory_list_private_keys"); pass("vault_directory_list_private_key_names"); pass("vault_directory_list_contact_names")
     try vault.storeBackup(id, data("encrypted backup bytes")); _ = try vault.backupCount(); try check(try vault.loadBackup(id) == data("encrypted backup bytes"), "backup")
     pass("vault_directory_store_backup"); pass("vault_directory_backup_count"); pass("vault_directory_load_backup", 3)
@@ -157,27 +166,27 @@ func vaultLifecycle() throws {
     try vault.rememberAccessSlotLabel(id, 7, "primary"); _ = try vault.listAccessSlotLabels(id); _ = try vault.findAccessSlotLabels(id, "primary"); pass("vault_directory_remember_access_slot_label"); pass("vault_directory_list_access_slot_labels"); pass("vault_directory_find_access_slot_labels")
     try vault.rememberPassword(id, password); _ = try vault.rememberedPassword(id); pass("vault_directory_remember_password"); pass("vault_directory_remembered_password", 3)
     let vaultForm = try vault.defineForm("login", "Login", "Login form", fields()); _ = try vault.resolveForm("login"); _ = try vault.listForms(); pass("vault_directory_define_form"); pass("vault_directory_resolve_form"); pass("vault_directory_list_forms")
-    _ = try vault.listFormRevisions(vaultForm.typeID); pass("vault_directory_list_form_revisions", 2)
+    _ = try vault.listFormRevisions(vaultForm.typeId); pass("vault_directory_list_form_revisions", 2)
     _ = try vault.seedForms(); pass("vault_directory_seed_forms"); _ = try vault.listFormAliases(); pass("vault_directory_list_form_aliases")
     try vault.forgetAccessSlotLabel(id, 7); try vault.forgetLockbox("/tmp/example.lbox"); try vault.deleteContact("bob"); pass("vault_directory_forget_access_slot_label"); pass("vault_directory_forget_lockbox"); pass("vault_directory_delete_contact")
     try vault.deletePrivateKey("alice"); try vault.restorePrivateKey("alice", profile, owner, true); pass("vault_directory_delete_private_key", 2); pass("vault_directory_restore_private_key", 2)
     try vault.free(); pass("vault_directory_free")
-    let readonly = try api.vaultReadOnlyOpen(root, password); _ = try readonly.listProfileNames(); _ = try readonly.listContactNames(); _ = try readonly.listFormAliases(); _ = try readonly.listKnownLockboxes()
+    let readonly = try api.openReadOnlyVault(root, password); _ = try readonly.listProfileNames(); _ = try readonly.listContactNames(); _ = try readonly.listFormAliases(); _ = try readonly.listKnownLockboxes()
     pass("vault_read_only_open"); pass("vault_read_only_list_profile_names", 2); pass("vault_read_only_list_contact_names"); pass("vault_read_only_list_form_aliases", 2); pass("vault_read_only_list_known_lockboxes")
     try readonly.free(); pass("vault_read_only_free")
-    try api.vaultDirectoryChangePassword(root, password, changed); pass("vault_directory_change_password")
-    try api.vaultDirectoryOpen(root, changed).free(); pass("vault_directory_open"); print("ARTIFACT\tswift\tvault-opened\t\(root)")
-    try api.vaultDirectoryOpenOrCreate(root, changed).free(); pass("vault_directory_open_or_create")
-    try ownerPublic.publicFree(); try owner.free(); try contactPublic.publicFree(); try contact.free(); try profile.free()
+    try api.changeVaultPassword(root, password, changed); pass("vault_directory_change_password")
+    try api.openVault(root, changed).free(); pass("vault_directory_open"); print("ARTIFACT\tswift\tvault-opened\t\(root)")
+    try api.openOrCreateVault(root, changed).free(); pass("vault_directory_open_or_create")
+    try ownerPublic.dispose(); try owner.dispose(); try contactPublic.publicFree(); try contact.free(); try profile.free()
 }
 
 func defaultVault() throws {
     try makeDirectory(ProcessInfo.processInfo.environment["LOCKBOX_VAULT_DIR"]!)
-    try api.vaultDirectoryReplaceDefault(data("default password")).free(); pass("vault_directory_replace_default")
-    try api.vaultReadOnlyOpenDefault(data("default password")).free(); pass("vault_read_only_open_default")
-    _ = try api.vaultDefaultDirectory(); _ = try api.vaultDefaultPath(); pass("vault_default_directory", 3); pass("vault_default_path", 2)
-    try api.vaultDirectoryOpenOrCreateDefault(data("default password")).free(); pass("vault_directory_open_or_create_default")
-    try api.vaultDirectoryChangeDefaultPassword(data("default password"), data("changed default password")); pass("vault_directory_change_default_password")
+    try api.replaceDefaultVault(data("default password")).free(); pass("vault_directory_replace_default")
+    try api.openDefaultReadOnlyVault(data("default password")).free(); pass("vault_read_only_open_default")
+    _ = try api.defaultVaultRoot(); _ = try api.vaultDefaultPath(); pass("vault_default_directory", 3); pass("vault_default_path", 2)
+    try api.openOrCreateDefaultVault(data("default password")).free(); pass("vault_directory_open_or_create_default")
+    try api.changeDefaultVaultPassword(data("default password"), data("changed default password")); pass("vault_directory_change_default_password")
     let backup = try artifactRoot() + "/default-vault.backup"; try? files.removeItem(atPath: backup)
     _ = try api.vaultBackupDefault(backup, false); _ = try api.vaultRestoreDefault(backup, true); pass("vault_backup_default"); pass("vault_restore_default")
 }
@@ -191,17 +200,17 @@ func platformStore() throws {
 
 func agentAndLocal() throws {
     try makeDirectory(ProcessInfo.processInfo.environment["LOCKBOX_SESSION_AGENT_DIR"]!); try makeDirectory(ProcessInfo.processInfo.environment["LOCKBOX_VAULT_DIR"]!)
-    let directory = try api.vaultDirectoryReplaceDefault(data("agent vault password")), profile = try api.keyContactGenerate()
-    try directory.storePrivateKey("default", profile); try profile.free(); try directory.free(); try api.agent.forgetAll(); pass("vault_forget_all")
-    for _ in 0..<200 { if try api.agent.isRunning() { break }; Thread.sleep(forTimeInterval: 0.05) }
-    try check(try api.agent.isRunning(), "agent"); pass("vault_agent_serve"); pass("vault_is_running"); _ = try api.agent.start(); pass("vault_agent_start"); try api.agent.verifyTransport(); pass("vault_agent_verify_transport")
-    let id = sequence(192, 207), key = sequence(32, 63); try api.agent.put(id, key); try check(try api.agent.get(id) == key, "agent key"); _ = try api.agent.list()
+    let directory = try api.replaceDefaultVault(data("agent vault password")), profile = try api.keyContactGenerate()
+    try directory.storePrivateKey("default", profile); try profile.free(); try directory.free(); try api.agentSession.forgetAll(); pass("vault_forget_all")
+    for _ in 0..<200 { if try api.agentSession.isRunning() { break }; Thread.sleep(forTimeInterval: 0.05) }
+    try check(try api.agentSession.isRunning(), "agent"); pass("vault_agent_serve"); pass("vault_is_running"); _ = try api.agentSession.start(); pass("vault_agent_start"); try api.agentSession.verifyTransport(); pass("vault_agent_verify_transport")
+    let id = sequence(192, 207), key = sequence(32, 63); try api.agentSession.put(id, key); try check(try api.agentSession.get(id) == key, "agent key"); _ = try api.agentSession.list()
     pass("vault_agent_put"); pass("vault_agent_get", 3); pass("vault_agent_list")
-    try api.agent.putVaultUnlockKey("vault-id", key, 120); _ = try api.agent.getVaultUnlockKey("vault-id"); pass("vault_agent_put_vault_unlock_key"); pass("vault_agent_get_vault_unlock_key", 3)
-    let owner = try api.keySigningGenerate(); try api.agent.putOwnerSigningKey("vault-id", "alice", owner, 120); try api.agent.getOwnerSigningKey("vault-id", "alice").free(); pass("vault_agent_put_owner_signing_key"); pass("vault_agent_get_owner_signing_key")
-    let activity = try api.agent.beginActivity("open"); pass("vault_agent_begin_activity"); try api.agent.endActivity(activity); pass("vault_agent_end_activity")
-    _ = try api.agent.sleepSupport(); pass("vault_agent_sleep_support"); _ = try api.vaultAgentLogPath(); _ = try api.vaultAgentLogDestination(); pass("vault_agent_log_path", 2); pass("vault_agent_log_destination", 2)
-    let local = try api.vaultLocal(); pass("vault_local"); let root = "/tmp/revault-swift-local"; try resetDirectory(root)
+    try api.agentSession.putVaultUnlockKey("vault-id", key, 120); _ = try api.agentSession.getVaultUnlockKey("vault-id"); pass("vault_agent_put_vault_unlock_key"); pass("vault_agent_get_vault_unlock_key", 3)
+    let owner = try api.generateProfileSigningKeyPair(); try api.agentSession.cacheProfileSigningKey("vault-id", "alice", owner, 120); try api.agentSession.profileSigningKey("vault-id", "alice").dispose(); pass("vault_agent_put_owner_signing_key"); pass("vault_agent_get_owner_signing_key")
+    let activity = try api.agentSession.beginActivity("open"); pass("vault_agent_begin_activity"); try api.agentSession.endActivity(activity); pass("vault_agent_end_activity")
+    _ = try api.agentSession.sleepSupport(); pass("vault_agent_sleep_support"); _ = try api.vaultAgentLogPath(); _ = try api.vaultAgentLogDestination(); pass("vault_agent_log_path", 2); pass("vault_agent_log_destination", 2)
+    let local = api.agentSession; pass("vault_local"); let root = "/tmp/revault-swift-local"; try resetDirectory(root)
     let passwordPath = root + "/password.lbox"; let box = try local.createLockboxPassword(passwordPath, data("local password")); try box.addFile("/data.txt", data("local vault data"), false); try box.commit(); try box.free(); pass("vault_create_lockbox_password", 3)
     try local.cacheLockboxPassword(passwordPath, data("local password"), 120); pass("vault_cache_lockbox_password")
     let opened = try local.openLockboxPassword(passwordPath, data("local password")); _ = try opened.getFile("/data.txt"); try opened.free(); pass("vault_open_lockbox_password", 3); try local.closeLockbox(passwordPath); pass("vault_close_lockbox")
@@ -209,23 +218,23 @@ func agentAndLocal() throws {
     let contentOpen = try local.openLockboxContentKey(contentPath, key, owner); _ = try contentOpen.getFile("/data.txt"); try contentOpen.free(); pass("vault_open_lockbox_content_key", 3)
     let contact = try api.keyContactGenerate(), publicKey = try api.keyContactPublicFromBytes(try contact.publicBytes()); let contactBox = try local.createLockboxContact(root + "/contact.lbox", publicKey, "recipient", owner)
     try contactBox.addFile("/data.txt", data("local vault data"), false); try contactBox.commit(); try contactBox.free(); pass("vault_create_lockbox_contact", 3)
-    try publicKey.publicFree(); try contact.free(); try local.closeAll(); pass("vault_close_all"); try local.free(); pass("vault_free"); try owner.free()
-    try api.agent.forgetOwnerSigningKey("vault-id", "alice"); try api.agent.forgetVaultUnlockKey("vault-id"); try api.agent.forget(id); pass("vault_agent_forget_owner_signing_key"); pass("vault_agent_forget_vault_unlock_key"); pass("vault_agent_forget")
-    try api.agent.stop(); pass("vault_agent_stop")
+    try publicKey.publicFree(); try contact.free(); try local.closeAll(); pass("vault_close_all"); try local.free(); pass("vault_free"); try owner.dispose()
+    try api.agentSession.forgetProfileSigningKey("vault-id", "alice"); try api.agentSession.forgetVaultUnlockKey("vault-id"); try api.agentSession.forget(id); pass("vault_agent_forget_owner_signing_key"); pass("vault_agent_forget_vault_unlock_key"); pass("vault_agent_forget")
+    try api.agentSession.stop(); pass("vault_agent_stop")
 }
 
 func interop(_ producer: String) throws {
     let root = ProcessInfo.processInfo.environment["REVAULT_E2E_ARTIFACT_DIR"] ?? "/tmp/revault-e2e-artifacts"
     let archive = try Data(contentsOf: URL(fileURLWithPath: root + "/\(producer)/archive.lbox")); let box = try api.lockboxOpen(archive, Data(repeating: 75, count: 32))
     try check(try box.getFile("/renamed.txt") == data("replacement payload"), "foreign archive"); try box.free()
-    let vault = try api.vaultDirectoryOpen(root + "/\(producer)/vault", data("new vault password")); try check(try vault.structureVersion() > 0, "foreign vault"); try vault.free()
+    let vault = try api.openVault(root + "/\(producer)/vault", data("new vault password")); try check(try vault.structureVersion() > 0, "foreign vault"); try vault.free()
     print("INTEROP\tswift\t\(producer)\tarchive\t3"); print("INTEROP\tswift\t\(producer)\tvault\t2")
 }
 
 let arguments = CommandLine.arguments
-if arguments.count > 1 && arguments[1] == "--serve-agent" { try api.agent.serve() }
+if arguments.count > 1 && arguments[1] == "--serve-agent" { try api.agentSession.serve() }
 else if arguments.count > 1 && arguments[1] == "--default" { try defaultVault() }
 else if arguments.count > 1 && arguments[1] == "--platform" { try platformStore() }
 else if arguments.count > 1 && arguments[1] == "--agent" { try agentAndLocal() }
-else if arguments.count > 2 && arguments[1] == "--interop" { try interop(arguments[2]) }
+else if arguments.count > 2 && arguments[1] == "--interop" { for producer in arguments.dropFirst(2) { try interop(producer) } }
 else { try archiveLifecycle(); try keyLifecycle(); try advancedArchive(); try vaultLifecycle(); _ = api.lastError(); pass("buffer_last_error") }
