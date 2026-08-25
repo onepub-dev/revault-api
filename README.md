@@ -20,4 +20,4 @@ go get github.com/onepub-dev/revault-api@v0.3.11
 composer require onepub/revault-api:0.3.11
 ```
 
-All three packages use the same ABI-v2 native artifacts. Secret variable and form-field reads are callback-scoped and their temporary native storage is wiped after use.
+All three packages use the same ABI-v3 native artifacts. Secret variable and form-field reads are callback-scoped and their temporary native storage is wiped after use.
