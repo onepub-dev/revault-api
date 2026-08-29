@@ -1,5 +1,0 @@
-module RevaultC [system] {
-    header "revault_api.h"
-    link "revault_api"
-    export *
-}

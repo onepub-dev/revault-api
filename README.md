@@ -1,23 +1,37 @@
-# reVault API bindings
+# reVault for Go
 
-reVault is an encrypted archive and local-vault library for files, credentials, keys, and typed records. This companion repository publishes the Go module, Swift package, and PHP Composer package from the same versioned native ABI. See the [reVault documentation](https://github.com/onepub-dev/reVault/tree/main/docs).
+reVault is an encrypted archive and local-vault library for files, credentials,
+keys, and typed records. The Go package links the version-matched native SDK.
+See the [reVault manual](https://docs.revault.onepub.dev/).
 
-## Go
-
-```sh
+```shell
 go get github.com/onepub-dev/revault-api@v0.3.12
 ```
 
-## Swift
+The [complete method-example index](https://github.com/onepub-dev/reVault/blob/main/bindings/API_EXAMPLES.md)
+is maintained in the source repository.
 
-```swift
-.package(url: "https://github.com/onepub-dev/revault-api", exact: "0.3.12")
+```go
+runtime, err := revault.Load() // verifies the installed carrier
+box, err := revault.Create(make([]byte, 32)) // use a real content key securely
+if err != nil { log.Fatal(err) }
+defer box.Close()
+_ = box.AddFile("/hello.txt", []byte("hello\n"), false)
+_ = box.SetVariable("owner", "alice")
+_ = box.SetSecretVariable("token", []byte("secret"))
+_ = box.WithSecretVariable("token", func(token []byte) error {
+    // token is cleared immediately after this callback.
+    return nil
+})
+_ = box.Commit()
 ```
 
-## PHP
-
-```sh
-composer require onepub/revault-api:0.3.12
-```
-
-All three packages use the same ABI-v3 native artifacts. Secret variable and form-field reads are callback-scoped and their temporary native storage is wiped after use.
+`Revault.Load` does not open a Vault or Lockbox. `OpenVault` opens existing
+persistent metadata; `ReplaceVault` is the explicit destructive constructor.
+Vault passphrases, lockbox passwords, and content keys are distinct caller
+owned byte slices. Native failures return `NativeError`. `SessionAgent` is
+explicit and caches only temporary content keys; it does not delete files or
+persistent credentials. The module contains a version-matched static carrier
+for each supported Go target, so cgo links the carrier without a separate SDK
+installation. Secret callbacks receive a temporary byte slice; never retain
+it.
