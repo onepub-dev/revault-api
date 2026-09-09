@@ -25,7 +25,7 @@ Go conventions and use the matching reVault engine.
 ## Installation and native runtime
 
 ```shell
-go get github.com/onepub-dev/revault-api@v0.3.14
+go get github.com/onepub-dev/revault-api@v0.3.15
 ```
 
 The module contains a static library for each supported Go operating system
