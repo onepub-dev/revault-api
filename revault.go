@@ -8,6 +8,7 @@ package revault
 import "C"
 
 import (
+	"encoding/json"
 	"fmt"
 	"unsafe"
 )
@@ -497,6 +498,16 @@ func OpenFile(path string, contentKey []byte, signer *ProfileSigningKeyPair) (*L
 	return lockboxFile(path, "open", "content-key", contentKey, nil, signing, LockboxOptions{CacheMode: "bytes", CacheBytes: 64 << 20, Workload: "interactive", Worker: "auto"})
 }
 
+// OpenUnencryptedFile opens an existing plaintext archive with a shared
+// read-only lock, without a credential or Session Agent. Close the handle to
+// release the lock; encrypted archives return an error.
+//
+// Example: box, err := revault.OpenUnencryptedFile(path)
+// if err != nil { return err }; defer box.Close(); payload, err := box.GetFile("/index.html")
+func OpenUnencryptedFile(path string) (*Lockbox, error) {
+	return lockboxFile(path, "read", "unencrypted", nil, nil, nil, LockboxOptions{CacheMode: "bytes", CacheBytes: 64 << 20, Workload: "interactive", Worker: "auto"})
+}
+
 // OpenFileWithAccess selects shared read or exclusive write access independently of signer.
 // Unsigned archives accept a nil signer for writes; signed archives require their owner key.
 func OpenFileWithAccess(path string, contentKey []byte, signer *ProfileSigningKeyPair, writable bool) (*Lockbox, error) {
@@ -748,6 +759,17 @@ func (box *Lockbox) SetVariable(name, value string) error {
 // SetSecretVariable sets secret variable.
 func (box *Lockbox) SetSecretVariable(name string, value []byte) error {
 	return require(bool(C.lockbox_set_secret_variable(box.handle, charPointer(name), C.size_t(len(name)), bytePointer(value), C.size_t(len(value)))))
+}
+
+// ItemDescription gets/sets/clears encrypted guidance; commit Lockbox writes.
+// Field guidance belongs to the definition. Pass nil for unused field/text.
+func (box *Lockbox) ItemDescription(target, reference, operation string, field, text *string) (*string, error) {
+	data, err := json.Marshal(map[string]any{"target": target, "reference": reference, "operation": operation, "field": field, "text": text})
+	if err != nil {
+		return nil, err
+	}
+	request := string(data)
+	return decodeResult(C.lockbox_item_description(box.handle, charPointer(request), C.size_t(len(request))), decodeOptionalString)
 }
 
 // GetVariable returns variable.
@@ -1218,6 +1240,17 @@ func (vault *vaultStore) StoreProfileEmail(name, email string) error {
 	return require(bool(C.vault_directory_store_profile_email(vault.handle, charPointer(name), C.size_t(len(name)), charPointer(email), C.size_t(len(email)))))
 }
 
+// ItemDescription gets/sets/clears encrypted guidance; commit Lockbox writes.
+// Field guidance belongs to the definition. Pass nil for unused field/text.
+func (box *vaultStore) ItemDescription(target, reference, operation string, field, text *string) (*string, error) {
+	data, err := json.Marshal(map[string]any{"target": target, "reference": reference, "operation": operation, "field": field, "text": text})
+	if err != nil {
+		return nil, err
+	}
+	request := string(data)
+	return decodeResult(C.vault_directory_item_description(box.handle, charPointer(request), C.size_t(len(request))), decodeOptionalString)
+}
+
 // ProfileEmail returns or performs profile email.
 func (vault *vaultStore) ProfileEmail(name string) (*string, error) {
 	return decodeResult(C.vault_directory_profile_email(vault.handle, charPointer(name), C.size_t(len(name))), decodeOptionalString)
@@ -1362,8 +1395,8 @@ func (vault *vaultStore) ListFormRevisions(typeID string) ([]FormDefinition, err
 	return decodeResult(C.vault_directory_list_form_revisions(vault.handle, charPointer(typeID), C.size_t(len(typeID))), decodeFormDefinitionList)
 }
 
-// ReadOnlyVault lists local metadata for discovery or diagnostics
-// without loading an owner signing key or exposing mutation operations.
+// ReadOnlyVault reads stored credentials and metadata without modifying records.
+// A caller with the Vault passphrase can retrieve private keys and passwords.
 type ReadOnlyVault struct{ handle unsafe.Pointer }
 
 // openReadOnlyVault opens read only vault directory.
@@ -1375,7 +1408,7 @@ func openReadOnlyVault(root string, password []byte) (*ReadOnlyVault, error) {
 	return &ReadOnlyVault{handle: h}, nil
 }
 
-// OpenReadOnlyVault opens an existing Vault for metadata discovery.
+// OpenReadOnlyVault opens an existing Vault for concurrent credential and metadata reads.
 func OpenReadOnlyVault(root string, vaultPassphrase []byte) (*ReadOnlyVault, error) {
 	return openReadOnlyVault(root, vaultPassphrase)
 }
@@ -1389,9 +1422,66 @@ func openDefaultReadOnlyVault(password []byte) (*ReadOnlyVault, error) {
 	return &ReadOnlyVault{handle: h}, nil
 }
 
-// OpenDefaultReadOnlyVault opens the default Vault for metadata discovery.
+// OpenDefaultReadOnlyVault opens the default Vault for concurrent credential and metadata reads.
 func OpenDefaultReadOnlyVault(vaultPassphrase []byte) (*ReadOnlyVault, error) {
 	return openDefaultReadOnlyVault(vaultPassphrase)
+}
+
+// LoadPrivateKey returns an existing profile private key; close the returned key after use.
+func (vault *ReadOnlyVault) LoadPrivateKey(name string) (*ContactKeyPair, error) {
+	h := C.vault_read_only_load_private_key(vault.handle, charPointer(name), C.size_t(len(name)))
+	if h == nil {
+		return nil, lastError()
+	}
+	return &ContactKeyPair{handle: h}, nil
+}
+
+// LoadPrivateKeyGeneration returns one stored historical private key.
+func (vault *ReadOnlyVault) LoadPrivateKeyGeneration(name string, index uint16) (*ContactKeyPair, error) {
+	h := C.vault_read_only_load_private_key_generation(vault.handle, charPointer(name), C.size_t(len(name)), C.uint16_t(index))
+	if h == nil {
+		return nil, lastError()
+	}
+	return &ContactKeyPair{handle: h}, nil
+}
+
+// LoadProfileSigningKey returns an existing signing key or a NotFound error; it never generates one.
+func (vault *ReadOnlyVault) LoadProfileSigningKey(name string) (*ProfileSigningKeyPair, error) {
+	h := C.vault_read_only_load_owner_signing_key(vault.handle, charPointer(name), C.size_t(len(name)))
+	if h == nil {
+		return nil, lastError()
+	}
+	return &ProfileSigningKeyPair{handle: h}, nil
+}
+
+// LoadProfileSigningKeyGeneration returns a stored historical signing key.
+func (vault *ReadOnlyVault) LoadProfileSigningKeyGeneration(name string, index uint16) (*ProfileSigningKeyPair, error) {
+	h := C.vault_read_only_load_owner_signing_key_generation(vault.handle, charPointer(name), C.size_t(len(name)), C.uint16_t(index))
+	if h == nil {
+		return nil, lastError()
+	}
+	return &ProfileSigningKeyPair{handle: h}, nil
+}
+
+// WithProfilePassword gives callback temporary plaintext bytes from a stored password profile.
+func (vault *ReadOnlyVault) WithProfilePassword(name string, callback func([]byte) error) error {
+	h := C.vault_read_only_load_profile_password(vault.handle, charPointer(name), C.size_t(len(name)))
+	if h == nil {
+		return lastError()
+	}
+	return withSecret(func(output *unsafe.Pointer) bool { *output = h; return true }, callback)
+}
+
+// WithRememberedPassword gives callback a remembered password if it exists and clears the transfer bytes.
+func (vault *ReadOnlyVault) WithRememberedPassword(id []byte, callback func([]byte) error) (bool, error) {
+	present := false
+	err := withSecret(func(output *unsafe.Pointer) bool {
+		return bool(C.vault_read_only_remembered_password(vault.handle, bytePointer(id), C.size_t(len(id)), output))
+	}, func(secret []byte) error {
+		present = true
+		return callback(secret)
+	})
+	return present, err
 }
 
 // ListProfileNames lists profile names.
@@ -1673,3 +1763,177 @@ func (vault *LockboxSession) CloseLockbox(path string) error {
 
 // CloseAll releases the native resources held by all.
 func (vault *LockboxSession) CloseAll() error { return require(bool(C.vault_close_all(vault.handle))) }
+
+// ContactExchange retains protected native credentials without retaining a Vault lock.
+// Close the session promptly; the Session Agent is never used.
+type ComparisonChannel string
+
+const (
+	// InPerson compares with the person present.
+	InPerson ComparisonChannel = "in-person"
+	// KnownPhoneCall calls an independently known number.
+	KnownPhoneCall ComparisonChannel = "known-phone-call"
+	// TrustedMessenger uses an independently authenticated messenger.
+	TrustedMessenger ComparisonChannel = "trusted-messenger"
+)
+
+// ContactExchange retains protected credentials but no Vault lock.
+type ContactExchange struct{ handle unsafe.Pointer }
+
+// OpenContactExchange opens a session for an existing Vault file.
+func OpenContactExchange(path string, vaultPassphrase []byte) (*ContactExchange, error) {
+	handle := C.contact_exchange_open(charPointer(path), C.size_t(len(path)), bytePointer(vaultPassphrase), C.size_t(len(vaultPassphrase)))
+	if handle == nil {
+		return nil, &NativeError{Message: C.GoString(C.buffer_last_error())}
+	}
+	return &ContactExchange{handle: handle}, nil
+}
+func (session *ContactExchange) execute(request map[string]any) ([]ContactExchangeStatus, error) {
+	if session.handle == nil {
+		return nil, fmt.Errorf("exchange session is closed")
+	}
+	bytes, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	text := string(bytes)
+	return decodeResult(C.contact_exchange_execute(session.handle, charPointer(text), C.size_t(len(text))), decodeContactExchangeStatusList)
+}
+func exchangeOne(values []ContactExchangeStatus, err error) (ContactExchangeStatus, error) {
+	if err != nil {
+		return ContactExchangeStatus{}, err
+	}
+	if len(values) != 1 {
+		return ContactExchangeStatus{}, fmt.Errorf("invalid exchange response")
+	}
+	return values[0], nil
+}
+
+// Invite creates an invitation sharing both public keys; retry pending delivery with List.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	offer, err := session.Invite(relayOrigin, "default", "bob@example.com", 24)
+//	if err != nil { return err }
+//	if offer.RelayPending { _, err = session.List(false) }
+//	if err != nil { return err }
+//
+// ```
+func (session *ContactExchange) Invite(relay, profile, recipientEmail string, ttlHours uint32) (ContactExchangeStatus, error) {
+	return exchangeOne(session.execute(map[string]any{"operation": "invite", "relay": relay, "profile": profile, "recipient_email": recipientEmail, "ttl_hours": ttlHours}))
+}
+
+// Accept returns the selected profile's complete public identity.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	reply, err := session.Accept(invitationURL, "default")
+//	if err != nil { return err }
+//	fmt.Println(reply.Fingerprint)
+//
+// ```
+func (session *ContactExchange) Accept(invitation, profile string) (ContactExchangeStatus, error) {
+	return exchangeOne(session.execute(map[string]any{"operation": "accept", "invitation": invitation, "profile": profile}))
+}
+
+// List returns public status, optionally avoiding relay requests.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	statuses, err := session.List(true)
+//	if err != nil { return err }
+//	for _, status := range statuses { fmt.Println(status.Id) }
+//
+// ```
+func (session *ContactExchange) List(offline bool) ([]ContactExchangeStatus, error) {
+	return session.execute(map[string]any{"operation": "list", "offline": offline})
+}
+
+// Verify saves both keys after independent full-fingerprint comparison through in-person, known-phone-call or trusted-messenger.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	// After independent identity and full-fingerprint comparison:
+//	_, err = session.Verify(exchangeID, "bob", comparedFingerprint, revault.InPerson)
+//	if err != nil { return err }
+//
+// ```
+func (session *ContactExchange) Verify(id, contactName, fingerprint string, channel ComparisonChannel) (ContactExchangeStatus, error) {
+	return exchangeOne(session.execute(map[string]any{"operation": "verify", "id": id, "contact_name": contactName, "fingerprint": fingerprint, "channel": channel}))
+}
+
+// VerifyAuthor authenticates an archive against the saved contact signing key.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	if err := session.VerifyAuthor("alice", receivedArchivePath); err != nil { return err }
+//
+// ```
+func (session *ContactExchange) VerifyAuthor(contactName, lockboxPath string) error {
+	_, err := session.execute(map[string]any{"operation": "verify_author", "contact_name": contactName, "lockbox_path": lockboxPath})
+	return err
+}
+
+// Cancel cancels an owned invitation before acceptance.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	if err := session.Cancel(exchangeID); err != nil { return err }
+//
+// ```
+func (session *ContactExchange) Cancel(id string) error {
+	_, err := session.execute(map[string]any{"operation": "cancel", "id": id})
+	return err
+}
+
+// Forget removes local exchange state while preserving contacts.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	if err := session.Forget(exchangeID); err != nil { return err }
+//
+// ```
+func (session *ContactExchange) Forget(id string) error {
+	_, err := session.execute(map[string]any{"operation": "forget", "id": id})
+	return err
+}
+
+// Close releases credentials without cancelling any exchange.
+// Example:
+// ```
+// session, err := revault.OpenContactExchange(vaultPath, vaultPassphrase)
+// if err != nil { return err }
+// defer session.Close()
+//
+//	statuses, err := session.List(true)
+//	if err != nil { return err }
+//	fmt.Println(len(statuses))
+//
+// ```
+func (session *ContactExchange) Close() {
+	if session.handle != nil {
+		C.contact_exchange_free(session.handle)
+		session.handle = nil
+	}
+}

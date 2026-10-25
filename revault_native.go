@@ -170,6 +170,15 @@ func (native) LockboxSetSecretVariable(handle unsafe.Pointer, name unsafe.Pointe
 func (native) LockboxGetVariable(handle unsafe.Pointer, name unsafe.Pointer, name_len C.size_t) C.RevaultBuffer {
 	return C.lockbox_get_variable(handle, (*C.char)(name), name_len)
 }
+func (native) ContactExchangeExecute(handle unsafe.Pointer, name unsafe.Pointer, name_len C.size_t) C.RevaultBuffer {
+	return C.contact_exchange_execute(handle, (*C.char)(name), name_len)
+}
+func (native) LockboxItemDescription(handle unsafe.Pointer, name unsafe.Pointer, name_len C.size_t) C.RevaultBuffer {
+	return C.lockbox_item_description(handle, (*C.char)(name), name_len)
+}
+func (native) VaultDirectoryItemDescription(handle unsafe.Pointer, name unsafe.Pointer, name_len C.size_t) C.RevaultBuffer {
+	return C.vault_directory_item_description(handle, (*C.char)(name), name_len)
+}
 func (native) LockboxGetSecretVariable(handle unsafe.Pointer, name unsafe.Pointer, name_len C.size_t, output *unsafe.Pointer) C.bool {
 	return C.lockbox_get_secret_variable(handle, (*C.char)(name), name_len, output)
 }
@@ -383,6 +392,9 @@ func (native) VaultKeyHexDecode(text unsafe.Pointer, len C.size_t) C.RevaultBuff
 func (native) VaultDirectoryOpen(root unsafe.Pointer, root_len C.size_t, password unsafe.Pointer, password_len C.size_t) unsafe.Pointer {
 	return C.vault_directory_open((*C.char)(root), root_len, (*C.uint8_t)(password), password_len)
 }
+func (native) ContactExchangeOpen(root unsafe.Pointer, root_len C.size_t, password unsafe.Pointer, password_len C.size_t) unsafe.Pointer {
+	return C.contact_exchange_open((*C.char)(root), root_len, (*C.uint8_t)(password), password_len)
+}
 func (native) VaultStructureVersionCurrent() C.uint32_t {
 	return C.vault_structure_version_current()
 }
@@ -566,11 +578,32 @@ func (native) VaultRestoreDefault(path unsafe.Pointer, path_len C.size_t, overwr
 func (native) VaultDirectoryFree(handle unsafe.Pointer) {
 	C.vault_directory_free(handle)
 }
+func (native) ContactExchangeFree(handle unsafe.Pointer) {
+	C.contact_exchange_free(handle)
+}
 func (native) VaultReadOnlyOpen(root unsafe.Pointer, root_len C.size_t, password unsafe.Pointer, password_len C.size_t) unsafe.Pointer {
 	return C.vault_read_only_open((*C.char)(root), root_len, (*C.uint8_t)(password), password_len)
 }
 func (native) VaultReadOnlyOpenDefault(password unsafe.Pointer, password_len C.size_t) unsafe.Pointer {
 	return C.vault_read_only_open_default((*C.uint8_t)(password), password_len)
+}
+func (native) VaultReadOnlyLoadPrivateKey(handle unsafe.Pointer, name unsafe.Pointer, nameLen C.size_t) unsafe.Pointer {
+	return C.vault_read_only_load_private_key(handle, (*C.char)(name), nameLen)
+}
+func (native) VaultReadOnlyLoadPrivateKeyGeneration(handle unsafe.Pointer, name unsafe.Pointer, nameLen C.size_t, index C.uint16_t) unsafe.Pointer {
+	return C.vault_read_only_load_private_key_generation(handle, (*C.char)(name), nameLen, index)
+}
+func (native) VaultReadOnlyLoadOwnerSigningKey(handle unsafe.Pointer, name unsafe.Pointer, nameLen C.size_t) unsafe.Pointer {
+	return C.vault_read_only_load_owner_signing_key(handle, (*C.char)(name), nameLen)
+}
+func (native) VaultReadOnlyLoadOwnerSigningKeyGeneration(handle unsafe.Pointer, name unsafe.Pointer, nameLen C.size_t, index C.uint16_t) unsafe.Pointer {
+	return C.vault_read_only_load_owner_signing_key_generation(handle, (*C.char)(name), nameLen, index)
+}
+func (native) VaultReadOnlyLoadProfilePassword(handle unsafe.Pointer, name unsafe.Pointer, nameLen C.size_t) unsafe.Pointer {
+	return C.vault_read_only_load_profile_password(handle, (*C.char)(name), nameLen)
+}
+func (native) VaultReadOnlyRememberedPassword(handle unsafe.Pointer, id unsafe.Pointer, idLen C.size_t, output *unsafe.Pointer) C.bool {
+	return C.vault_read_only_remembered_password(handle, (*C.uint8_t)(id), idLen, (*unsafe.Pointer)(output))
 }
 func (native) VaultReadOnlyListProfileNames(handle unsafe.Pointer) C.RevaultBuffer {
 	return C.vault_read_only_list_profile_names(handle)

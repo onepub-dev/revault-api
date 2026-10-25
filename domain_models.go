@@ -20,6 +20,32 @@ const (
 	LockboxEntryKindDirectory
 )
 
+// ContactExchangeStatus represents public reciprocal exchange status. Verification is a local trust decision; no management capability or private key is returned.
+type ContactExchangeStatus struct {
+	// Id: Random identifier of the saved exchange.
+	Id string
+	// Relay: Pinned HTTPS relay origin.
+	Relay string
+	// Invitation: Invitation URL to share only with the intended recipient.
+	Invitation string
+	// InviterEmail: Signed claimed inviter email, not independently verified by the relay.
+	InviterEmail string
+	// RecipientEmail: Signed claimed intended recipient email.
+	RecipientEmail string
+	// Fingerprint: Full shared fingerprint to compare independently; empty until both contributions are available.
+	Fingerprint string
+	// ExpiresMs: Signed invitation expiry in Unix milliseconds.
+	ExpiresMs uint64
+	// Accepted: Whether both signed public key bundles are locally pinned.
+	Accepted bool
+	// Verified: Whether this Vault independently verified and saved the contact.
+	Verified bool
+	// ContactName: Local saved contact name, or empty before verification.
+	ContactName string
+	// RelayPending: Whether the relay operation needs retrying; locally saved state is retained.
+	RelayPending bool
+}
+
 // LockboxEntry represents metadata for one file, directory, or symbolic link stored at a lockbox path.
 type LockboxEntry struct {
 	// Path: Absolute lockbox path of the stored entry.
@@ -50,6 +76,10 @@ type FormField struct {
 	Kind string
 	// Required: Whether a record must provide a value for this field.
 	Required bool
+	// Description: Multiline guidance captured by this field definition revision.
+	Description string
+	// HasDescription: Whether guidance is present, including explicitly empty text.
+	HasDescription bool
 }
 
 // FormDefinition represents a versioned form schema used to validate and label structured records in a lockbox.
@@ -96,6 +126,10 @@ type FormRecord struct {
 	DefinitionRevision uint32
 	// Values: Ordered non-secret field metadata and values.
 	Values []FormValue
+	// Description: Multiline context specific to this record.
+	Description string
+	// HasDescription: Whether the record description is present, including empty text.
+	HasDescription bool
 }
 
 // RecoveryReport represents the files and metadata recovered, or found damaged, while inspecting or salvaging a lockbox.
@@ -290,6 +324,10 @@ type Variable struct {
 	Name string
 	// Sensitivity: Whether the value is ordinary text or a protected secret.
 	Sensitivity string
+	// Description: Multiline description stored with this variable.
+	Description string
+	// HasDescription: Whether the variable description is present, including empty text.
+	HasDescription bool
 }
 
 // OwnerInspection represents whether a lockbox is owner-signed and, when available, the signing-key fingerprint.
@@ -374,6 +412,28 @@ type ErrorDetails struct {
 	Guidance string
 }
 
+func domainContactExchangeStatus(value *transport.ContactExchangeStatusT) *ContactExchangeStatus {
+	if value == nil {
+		return nil
+	}
+	result := &ContactExchangeStatus{}
+	result.Id = value.Id
+	result.Relay = value.Relay
+	result.Invitation = value.Invitation
+	result.InviterEmail = value.InviterEmail
+	result.RecipientEmail = value.RecipientEmail
+	result.Fingerprint = value.Fingerprint
+	result.ExpiresMs = value.ExpiresMs
+	result.Accepted = value.Accepted
+	result.Verified = value.Verified
+	result.ContactName = value.ContactName
+	result.RelayPending = value.RelayPending
+	return result
+}
+func decodeContactExchangeStatus(bytes []byte) *ContactExchangeStatus {
+	return domainContactExchangeStatus(transport.GetRootAsContactExchangeStatus(bytes, 0).UnPack())
+}
+
 func domainLockboxEntry(value *transport.LockboxEntryT) *LockboxEntry {
 	if value == nil {
 		return nil
@@ -411,6 +471,8 @@ func domainFormField(value *transport.FormFieldT) *FormField {
 	result.Label = value.Label
 	result.Kind = value.Kind
 	result.Required = value.Required
+	result.Description = value.Description
+	result.HasDescription = value.HasDescription
 	return result
 }
 func decodeFormField(bytes []byte) *FormField {
@@ -467,6 +529,8 @@ func domainFormRecord(value *transport.FormRecordT) *FormRecord {
 	for _, item := range value.Values {
 		result.Values = append(result.Values, *domainFormValue(item))
 	}
+	result.Description = value.Description
+	result.HasDescription = value.HasDescription
 	return result
 }
 func decodeFormRecord(bytes []byte) *FormRecord {
@@ -711,6 +775,8 @@ func domainVariable(value *transport.VariableT) *Variable {
 	result := &Variable{}
 	result.Name = value.Name
 	result.Sensitivity = value.Sensitivity
+	result.Description = value.Description
+	result.HasDescription = value.HasDescription
 	return result
 }
 func decodeVariable(bytes []byte) *Variable {
@@ -893,6 +959,15 @@ func decodeContactList(bytes []byte) []Contact {
 	return result
 }
 
+func decodeContactExchangeStatusList(bytes []byte) []ContactExchangeStatus {
+	source := transport.GetRootAsContactExchangeStatusList(bytes, 0).UnPack().Values
+	result := make([]ContactExchangeStatus, 0, len(source))
+	for _, value := range source {
+		result = append(result, *domainContactExchangeStatus(value))
+	}
+	return result
+}
+
 func decodeLockboxAliasList(bytes []byte) []LockboxAlias {
 	source := transport.GetRootAsLockboxAliasList(bytes, 0).UnPack().Values
 	result := make([]LockboxAlias, 0, len(source))
@@ -971,7 +1046,7 @@ func encodePathMoves(values []PathMove) []byte {
 func encodeFormFields(values []FormField) []byte {
 	items := make([]*transport.FormFieldT, 0, len(values))
 	for _, value := range values {
-		items = append(items, &transport.FormFieldT{Id: value.Id, Label: value.Label, Kind: value.Kind, Required: value.Required})
+		items = append(items, &transport.FormFieldT{Id: value.Id, Label: value.Label, Kind: value.Kind, Required: value.Required, Description: value.Description, HasDescription: value.HasDescription})
 	}
 	builder := flatbuffers.NewBuilder(256)
 	root := (&transport.FormFieldListT{Values: items}).Pack(builder)
